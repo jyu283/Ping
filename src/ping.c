@@ -37,14 +37,17 @@ static struct dns_result *dns_lookup(char *hostname)
 
     if ((status = getaddrinfo(hostname, NULL, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+        return NULL;
     }
 
     struct dns_result *result = malloc(sizeof(struct dns_result));
     struct addrinfo *info;
     for (info = servinfo; info != NULL; info = info->ai_next) {
-        getnameinfo(info->ai_addr, info->ai_addrlen, result->host, sizeof(result->host),
+        getnameinfo(info->ai_addr, info->ai_addrlen, 
+                    result->host, sizeof(result->host),
                     NULL, 0, NI_DGRAM);
-        getnameinfo(info->ai_addr, info->ai_addrlen, result->addr, sizeof(result->addr),
+        getnameinfo(info->ai_addr, info->ai_addrlen, 
+                    result->addr, sizeof(result->addr),
                     NULL, 0, NI_NUMERICHOST);
     }
     freeaddrinfo(info);
@@ -71,7 +74,10 @@ static void parse_input(char *input)
 
     printf("Looking up hostname/IP: %s...\n", hostname);
     struct dns_result *result = dns_lookup(hostname);
-    printf("%s\t%s\n", result->host, result->addr);
+    if (result) {
+        printf("%s\t%s\n", result->host, result->addr);
+        free(result);
+    }
 }
 
 /* Interactive Shell */
@@ -81,9 +87,6 @@ static void cli(void)
     size_t len = 0;
     ssize_t nread;
 
-    printf("Copyright (c) 2020 Jerry Yu.\n");
-    printf("Type \"help\" for more information. ");
-    printf("Type \"exit\" to quit the program.\n");
     print_prompt();
     while ((nread = getline(&line, &len, stdin)) != -1) {
         parse_input(line);
@@ -94,5 +97,8 @@ static void cli(void)
 
 int main(int argc, char *argv[])
 {
+    printf("Copyright (c) 2020 Jerry Yu.\n");
+    printf("Type \"help\" for more information. ");
+    printf("Type \"exit\" to quit the program.\n");
     cli();
 }
