@@ -64,6 +64,9 @@ static void parse_input(char *input)
     // Built-in commands.
     if (strcmp(hostname, "exit") == 0) {
         exit(0);
+    } if (strcmp(hostname, "help") == 0) {
+        print_help();
+        return;
     }
 
     printf("Looking up hostname/IP: %s...\n", hostname);
@@ -79,6 +82,7 @@ static void cli(void)
     ssize_t nread;
 
     printf("Copyright (c) 2020 Jerry Yu.\n");
+    printf("Type \"help\" for more information. ");
     printf("Type \"exit\" to quit the program.\n");
     print_prompt();
     while ((nread = getline(&line, &len, stdin)) != -1) {
