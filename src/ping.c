@@ -13,19 +13,22 @@
 #include <signal.h>
 #include <time.h>
 
-#define DEFAULT_TTL         64
-#define PING_PACKET_SIZE    64
-#define RECV_TIMEOUT        1
-#define SLEEP_SEC           1
-#define RECV_BUFF_SZ        256
+#define DEFAULT_TTL         64      /* default TTL */
+#define PING_PACKET_SIZE    64      /* size of a ping packet */
+#define RECV_TIMEOUT        1       /* receive time out in seconds */
+#define SLEEP_SEC           1       /* sleep time in seconds between pings */
+#define RECV_BUFF_SZ        256     /* size of buffer on receiving end */
 
 struct ping_packet {
     struct icmphdr hdr;
     char msg[PING_PACKET_SIZE - sizeof(struct icmphdr)];
 };
 
+// flag used for SIGINT handling
 static int ping_running = 0;
-static int count = -1, ttl = DEFAULT_TTL;
+
+// user settings
+static int count, ttl;
 
 /* Ctrl-C (SIGINT) will stop the ping loop */
 void sigint_handler(int dummy)
@@ -41,6 +44,7 @@ static inline void print_help(void)
     puts("Usage: ping [-c count] [-t ttl] destination");
 }
 
+/* IPv4 checksum */
 static unsigned short checksum(void *b, int len) 
 {    
 	unsigned short *buf = b; 
@@ -117,6 +121,7 @@ static void init_ping_packet(struct ping_packet *packet, int seqno)
     packet->hdr.checksum = checksum(packet, sizeof(*packet));
 }
 
+/* Send packet to destination via socket */
 static inline int send_ping_packet(const int sockfd, struct ping_packet *packet, 
                                    struct addrinfo *target)
 {
@@ -130,6 +135,7 @@ static inline int send_ping_packet(const int sockfd, struct ping_packet *packet,
     return 1;
 }
 
+/* Receive packet from socket */
 static inline int recv_ping_packet(int sockfd, char *buff)
 {
     int bytes;
@@ -144,12 +150,14 @@ static inline int recv_ping_packet(int sockfd, char *buff)
     return bytes;
 }
 
+/* Retreive the TTL of a reply packet */
 static int get_reply_ttl(char const *recv_buff)
 {
     struct iphdr *ip = (struct iphdr *)recv_buff;
     return ip->ttl; 
 }
 
+/* Retrieve the seqno of a reply packet */
 static int get_reply_seq(char const *recv_buff)
 {
     struct iphdr *ip = (struct iphdr *)recv_buff;
@@ -173,6 +181,7 @@ static int check_ttl_exceeded(char const *recv_buff)
     return 0;
 }
 
+// TODO: break up this function?
 /* Loop to perform ping. */
 static void do_ping(int sockfd, struct addrinfo *target)
 {
@@ -247,10 +256,10 @@ static void do_ping(int sockfd, struct addrinfo *target)
     printf("\n--- %s ping statistics ---\n", 
              target->ai_canonname == NULL ? hostname : target->ai_canonname);
     printf("%d packets transmitted, %d received, ", seqno - 1, total_received);
-    if (total_errors)
+    if (total_errors)   // report errors if any was detected
         printf("+%d errors, ", total_errors);
     printf("%.0f%% packet loss\n", ((double)(seqno - total_received) * 100)/seqno);
-    if (total_received) {
+    if (total_received) {   // if there was a successful ping, print statistics
         rtt_avg = rtt_total / total_received;
         printf("rtt min/avg/max = %.3Lf/%.3Lf/%.3Lf ms\n", 
                 rtt_min, rtt_avg, rtt_max);
@@ -275,6 +284,7 @@ static void ping(struct addrinfo *target)
     target = NULL;
 }
 
+/* Check if a flag exists in command line arguments */
 static int find_flag(int argc, char *argv[], char *target)
 {
     for (int i = 1; i < argc; i++) {
@@ -285,6 +295,7 @@ static int find_flag(int argc, char *argv[], char *target)
     return -1;
 }
 
+/* Search for -t flag and return setting value if exists */
 static int get_user_ttl_setting(int argc, char *argv[])
 {
     int i;
@@ -304,6 +315,7 @@ static int get_user_ttl_setting(int argc, char *argv[])
     return DEFAULT_TTL;
 }
 
+/* Search for -c flag and return setting value if exists */
 static int get_user_count_setting(int argc, char *argv[])
 {
     int i;
