@@ -1,6 +1,8 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <netdb.h>
 #include <stdio.h>
@@ -66,10 +68,9 @@ static struct addrinfo *dns_lookup(char *hostname)
     }
 } 
 
-static int init_socket(int *ttl, const char *timeout)
+static int init_socket(int *ttl, struct timeval *timeout)
 {
-    struct protoent *proto = getprotobyname("ICMP");
-    int sockfd = socket(PF_INET, SOCK_RAW, proto->p_proto);
+    int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sockfd < 0) {
         perror("socket");
         return -1;
@@ -79,12 +80,12 @@ static int init_socket(int *ttl, const char *timeout)
         return -1;
     }
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,
-               timeout, sizeof(struct timeval));
+               (const char *)timeout, sizeof(struct timeval));
     return sockfd;
 }
 
 /* Initialize an empty ping packet */
-static void init_ping_packet(struct ping_packet *packet, int *seqno)
+static void init_ping_packet(struct ping_packet *packet, int seqno)
 {
     int i;
 
@@ -98,16 +99,17 @@ static void init_ping_packet(struct ping_packet *packet, int *seqno)
         packet->msg[i] = i + '0';
     }
     packet->msg[i] = 0;
-    packet->hdr.un.echo.sequence = ++*seqno;
-    packet->hdr.checksum = checksum(&packet, sizeof(*packet));
+    packet->hdr.un.echo.sequence = seqno++;
+    packet->hdr.checksum = checksum(packet, sizeof(*packet));
 }
 
 static inline int send_ping_packet(const int sockfd, struct ping_packet *packet, 
                                    struct addrinfo *target)
 {
     int bytes;
+    struct sockaddr_in *addr = (struct sockaddr_in *)target->ai_addr;
     if ((bytes = sendto(sockfd, packet, sizeof(*packet), 0,
-                   target->ai_addr, target->ai_addrlen)) < 0) {
+                   (struct sockaddr *)addr, sizeof(*addr))) <= 0) {
         perror("Failed to send packet");
         return 0;
     } 
@@ -120,7 +122,7 @@ static inline int recv_ping_packet(int sockfd, struct ping_packet *packet)
     struct sockaddr_in recv_addr;
     socklen_t recv_addr_len = sizeof(recv_addr);
 
-    if ((bytes = recvfrom(sockfd, packet, sizeof(struct ping_packet), 0,
+    if ((bytes = recvfrom(sockfd, packet, sizeof(*packet), 0,
                  (struct sockaddr *)&recv_addr, &recv_addr_len)) <= 0) {
         perror("Failed to receive packet");
         return -1;
@@ -156,12 +158,15 @@ static void do_ping(int sockfd, struct addrinfo *target, int *ttl)
     // TODO: ping_continue will be set to 0 on SIGINT signal.
     // while (ping_continue) {
     for (int i = 0; i < 5; i++) {   // for loop for debugging ease
+        init_ping_packet(&packet, seqno);
+
         sleep(SLEEP_SEC);
-        init_ping_packet(&packet, &seqno);
 
         // Send packet and start timer
         clock_gettime(CLOCK_MONOTONIC, &t_start);
         packet_sent = send_ping_packet(sockfd, &packet, target);
+        if (packet_sent)
+            seqno++;
 
         if (recv_ping_packet(sockfd, &packet)) {
             clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -172,7 +177,7 @@ static void do_ping(int sockfd, struct addrinfo *target, int *ttl)
                 continue;
             }
 
-            printf("%d bytes from %s (%s): icmp_seq=%d ttl=%d time=%Lf ms\n",
+            printf("%d bytes from %s (%s): icmp_seq=%d ttl=%d time=%0.1Lf ms\n",
                    PING_PACKET_SIZE, hostname, addr, seqno, *ttl, rtt_msec);
             total_received++;  
         }
@@ -182,12 +187,12 @@ static void do_ping(int sockfd, struct addrinfo *target, int *ttl)
 /* Ping the given target. */
 static void ping(struct addrinfo *target)
 {
-    int sockfd, ttl = 255;
+    int sockfd, ttl = 64;
     struct timeval tv_out;
     tv_out.tv_sec = RECV_TIMEOUT;
     tv_out.tv_usec = 0;
 
-    sockfd = init_socket(&ttl, (const char *)&tv_out);
+    sockfd = init_socket(&ttl, &tv_out);
     if (sockfd == -1)
         return;
 
