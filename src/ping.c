@@ -55,21 +55,21 @@ static struct dns_result *dns_lookup(char *hostname)
 } 
 
 /* Parse hostname from user input. */
-static void parse_input(char *input)
+static int parse_input(char *input)
 {
     char *hostname;
 
     // Remove leading whitespace and trailing newline.
     input[strlen(input)-1] = '\0';
     if (!(hostname = strtok(input, "\t ")))
-        return;
+        return 0;
 
     // Built-in commands.
     if (strcmp(hostname, "exit") == 0) {
-        exit(0);
-    } if (strcmp(hostname, "help") == 0) {
+        return -1;
+    } else if (strcmp(hostname, "help") == 0) {
         print_help();
-        return;
+        return 0;
     }
 
     printf("Looking up hostname/IP: %s...\n", hostname);
@@ -78,18 +78,22 @@ static void parse_input(char *input)
         printf("%s\t%s\n", result->host, result->addr);
         free(result);
     }
+    return 0;
 }
 
 /* Interactive Shell */
 static void cli(void)
 {
+    int status;
     char *line = NULL;
     size_t len = 0;
     ssize_t nread;
 
     print_prompt();
     while ((nread = getline(&line, &len, stdin)) != -1) {
-        parse_input(line);
+        if ((status = parse_input(line)) == -1){
+            break;
+        }
         print_prompt();
     }
     free(line);
@@ -97,8 +101,10 @@ static void cli(void)
 
 int main(int argc, char *argv[])
 {
+    printf("PING v0.1-4.20.20\n");
     printf("Copyright (c) 2020 Jerry Yu.\n");
     printf("Type \"help\" for more information. ");
     printf("Type \"exit\" to quit the program.\n");
     cli();
+    printf("Better hire Jerry!\n");
 }
