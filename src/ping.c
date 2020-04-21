@@ -81,6 +81,7 @@ static struct addrinfo *dns_lookup(char *hostname)
     }
 } 
 
+/* Initialize the socket */
 static int init_socket(struct timeval *timeout)
 {
     int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -149,10 +150,33 @@ static int get_reply_ttl(char const *recv_buff)
     return ip->ttl; 
 }
 
+static int get_reply_seq(char const *recv_buff)
+{
+    struct iphdr *ip = (struct iphdr *)recv_buff;
+    struct icmphdr *icmp = (struct icmphdr *)(recv_buff + ip->ihl * 4);
+    return icmp->un.echo.sequence;
+}
+
+static int check_ttl_exceeded(char const *recv_buff)
+{
+    struct iphdr *ip = (struct iphdr *)recv_buff;
+    struct icmphdr *icmp = (struct icmphdr *)(recv_buff + ip->ihl * 4);
+
+    if (icmp->type == ICMP_TIME_EXCEEDED) {
+        struct iphdr *inner_ip = (struct iphdr *)((void *)icmp + 8);
+        struct icmphdr *inner_icmp = (struct icmphdr *)
+                                     ((void *)inner_ip + inner_ip->ihl * 4);
+        printf("seq_no=%d Time to live exceeded.\n",
+                inner_icmp->un.echo.sequence);
+        return 1;
+    }
+    return 0;
+}
+
 /* Loop to perform ping. */
 static void do_ping(int sockfd, struct addrinfo *target)
 {
-    int seqno = 0, packet_sent, total_received = 0;
+    int seqno = 1, packet_sent, total_received = 0, total_errors = 0;
     struct ping_packet packet;
     char recv_buff[RECV_BUFF_SZ];
     struct timespec t_start, t_end;
@@ -192,37 +216,45 @@ static void do_ping(int sockfd, struct addrinfo *target)
             seqno++;
 
         if (recv_ping_packet(sockfd, recv_buff)) {
-            clock_gettime(CLOCK_MONOTONIC, &t_end);
-            time_elapsed = ((double)(t_end.tv_nsec - t_start.tv_nsec))/1000000.0;
+            if (check_ttl_exceeded(recv_buff)) {
+                total_errors++;
+            } else {
+                clock_gettime(CLOCK_MONOTONIC, &t_end);
+                time_elapsed = ((double)(t_end.tv_nsec - t_start.tv_nsec))/1000000.0;
 
-            rtt_msec = (t_end.tv_sec - t_start.tv_sec) * 1000.0 + time_elapsed; 
-            if (!packet_sent)
-                continue;
-            if (!ping_running)  // SIGINT received
-                break;
-            printf("%d bytes from %s (%s): icmp_seq=%d ttl=%d time=%0.1Lf ms\n",
-                   PING_PACKET_SIZE, hostname, addr, 
-                   seqno, get_reply_ttl(recv_buff), rtt_msec);
-            total_received++;  
-            packet_sent = 0;
+                rtt_msec = (t_end.tv_sec - t_start.tv_sec) * 1000.0 + time_elapsed; 
+                if (!packet_sent)
+                    continue;
+                if (!ping_running)  // SIGINT received
+                    break;
+                printf("%d bytes from %s (%s): icmp_seq=%d ttl=%d time=%0.1Lf ms\n",
+                       PING_PACKET_SIZE, hostname, addr, 
+                       get_reply_seq(recv_buff), get_reply_ttl(recv_buff), rtt_msec);
+                total_received++;  
+                packet_sent = 0;
 
-            // rtt bookkeeping
-            rtt_total += rtt_msec;
-            if (rtt_msec > rtt_max)
-                rtt_max = rtt_msec;
-            if (rtt_msec < rtt_min)
-                rtt_min = rtt_msec;
+                // rtt bookkeeping
+                rtt_total += rtt_msec;
+                if (rtt_msec > rtt_max)
+                    rtt_max = rtt_msec;
+                if (rtt_msec < rtt_min)
+                    rtt_min = rtt_msec;
+            }
         }
         sleep(SLEEP_SEC);   // sleep for 1 sec
     }
 
-    rtt_avg = rtt_total / total_received;
     printf("\n--- %s ping statistics ---\n", 
              target->ai_canonname == NULL ? hostname : target->ai_canonname);
-    printf("%d packets transmitted, %d received, %.0f%% packet loss\n",
-            seqno, total_received, 
-            ((double)(seqno - total_received))/seqno);
-    printf("rtt min/avg/max = %.3Lf/%.3Lf/%.3Lf ms\n", rtt_min, rtt_avg, rtt_max);
+    printf("%d packets transmitted, %d received, ", seqno - 1, total_received);
+    if (total_errors)
+        printf("+%d errors, ", total_errors);
+    printf("%.0f%% packet loss\n", ((double)(seqno - total_received) * 100)/seqno);
+    if (total_received) {
+        rtt_avg = rtt_total / total_received;
+        printf("rtt min/avg/max = %.3Lf/%.3Lf/%.3Lf ms\n", 
+                rtt_min, rtt_avg, rtt_max);
+    }
 }
 
 /* Ping the given target. */
@@ -300,8 +332,6 @@ int main(int argc, char *argv[])
 
     ttl = get_user_ttl_setting(argc, argv);
     count = get_user_count_setting(argc, argv);
-
-    printf("DEBUG: ttl = %d, count = %d.\n", ttl, count);
 
     struct addrinfo *target = dns_lookup(argv[argc - 1]);
     if (!target)
