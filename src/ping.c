@@ -9,19 +9,30 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <time.h>
 
 #define DEFAULT_TTL         64
 #define PING_PACKET_SIZE    64
 #define RECV_TIMEOUT        1
 #define SLEEP_SEC           1
+#define RECV_BUFF_SZ        256
 
 struct ping_packet {
     struct icmphdr hdr;
     char msg[PING_PACKET_SIZE - sizeof(struct icmphdr)];
 };
 
-static int ping_continue = 1;
+static int ping_running = 0;
+
+/* Ctrl-C (SIGINT) will stop the ping loop */
+void sigint_handler(int dummy)
+{
+    if (ping_running)
+        ping_running = 0;
+    else 
+        exit(0);
+}
 
 static inline void print_help(void)
 {
@@ -116,13 +127,13 @@ static inline int send_ping_packet(const int sockfd, struct ping_packet *packet,
     return 1;
 }
 
-static inline int recv_ping_packet(int sockfd, struct ping_packet *packet)
+static inline int recv_ping_packet(int sockfd, char *buff)
 {
     int bytes;
     struct sockaddr_in recv_addr;
     socklen_t recv_addr_len = sizeof(recv_addr);
 
-    if ((bytes = recvfrom(sockfd, packet, sizeof(*packet), 0,
+    if ((bytes = recvfrom(sockfd, buff, RECV_BUFF_SZ, 0,
                  (struct sockaddr *)&recv_addr, &recv_addr_len)) <= 0) {
         perror("Failed to receive packet");
         return -1;
@@ -130,13 +141,21 @@ static inline int recv_ping_packet(int sockfd, struct ping_packet *packet)
     return bytes;
 }
 
+static int get_reply_ttl(char const *recv_buff)
+{
+    struct iphdr *ip = (struct iphdr *)recv_buff;
+    return ip->ttl; 
+}
+
 /* Loop to perform ping. */
 static void do_ping(int sockfd, struct addrinfo *target, int *ttl)
 {
-    int seqno = 0, packet_sent, total_received = 0;
+    int seqno = 0, packet_sent, total_received = 0, total_sent = 0;
     struct ping_packet packet;
+    char recv_buff[RECV_BUFF_SZ];
     struct timespec t_start, t_end;
     double time_elapsed;
+    long double total_time_elapsed = 0;
     long double rtt_msec = 0;
     char hostname[256];
     char addr[64];
@@ -155,20 +174,24 @@ static void do_ping(int sockfd, struct addrinfo *target, int *ttl)
                       PING_PACKET_SIZE - sizeof(struct icmphdr));
     }
     
-    // TODO: ping_continue will be set to 0 on SIGINT signal.
-    // while (ping_continue) {
-    for (int i = 0; i < 5; i++) {   // for loop for debugging ease
+    // ping_continue will be set to 0 on SIGINT signal.
+    ping_running = 1;
+    while (ping_running) {
         init_ping_packet(&packet, seqno);
 
         sleep(SLEEP_SEC);
+        if (!ping_running)
+            break;
 
         // Send packet and start timer
         clock_gettime(CLOCK_MONOTONIC, &t_start);
         packet_sent = send_ping_packet(sockfd, &packet, target);
-        if (packet_sent)
+        if (packet_sent) {
+            total_sent++;
             seqno++;
+        }
 
-        if (recv_ping_packet(sockfd, &packet)) {
+        if (recv_ping_packet(sockfd, recv_buff)) {
             clock_gettime(CLOCK_MONOTONIC, &t_end);
             time_elapsed = ((double)(t_end.tv_nsec - t_start.tv_nsec))/1000000.0;
             rtt_msec = (t_end.tv_sec - t_start.tv_sec) * 1000.0 + time_elapsed; 
@@ -177,11 +200,25 @@ static void do_ping(int sockfd, struct addrinfo *target, int *ttl)
                 continue;
             }
 
-            printf("%d bytes from %s (%s): icmp_seq=%d ttl=%d time=%0.1Lf ms\n",
-                   PING_PACKET_SIZE, hostname, addr, seqno, *ttl, rtt_msec);
-            total_received++;  
+            if (ping_running) {
+                printf("%d bytes from %s (%s): icmp_seq=%d ttl=%d time=%0.1Lf ms\n",
+                       PING_PACKET_SIZE, hostname, addr, 
+                       seqno, get_reply_ttl(recv_buff), rtt_msec);
+                total_received++;  
+                packet_sent = 0;
+            } else {
+                break;  // Ctrl-C
+            }
         }
     }
+
+    printf("\n--- %s ping statistics ---\n", 
+             target->ai_canonname == NULL ? hostname : target->ai_canonname);
+    printf("%d packets transmitted, %d received, %.0f%% packet loss, time %.0Lfms\n",
+            seqno, total_received, 
+            ((double)(seqno - total_received))/seqno, total_time_elapsed);
+            
+
 }
 
 /* Ping the given target. */
@@ -213,6 +250,7 @@ int main(int argc, char *argv[])
     if (!target)
         return 0;
     
+    signal(SIGINT, sigint_handler);
     ping(target);
 
     return 0;
