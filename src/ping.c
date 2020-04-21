@@ -256,9 +256,11 @@ static void do_ping(int sockfd, struct addrinfo *target)
     printf("\n--- %s ping statistics ---\n", 
              target->ai_canonname == NULL ? hostname : target->ai_canonname);
     printf("%d packets transmitted, %d received, ", seqno - 1, total_received);
-    if (total_errors)   // report errors if any was detected
+    if (total_errors) {  // report errors if any was detected
         printf("+%d errors, ", total_errors);
-    printf("%.0f%% packet loss\n", ((double)(seqno - total_received) * 100)/seqno);
+    }
+    printf("%.0f%% packet loss\n", 
+          ((double)(seqno - 1 - total_received) * 100)/seqno);
     if (total_received) {   // if there was a successful ping, print statistics
         rtt_avg = rtt_total / total_received;
         printf("rtt min/avg/max = %.3Lf/%.3Lf/%.3Lf ms\n", 
@@ -282,6 +284,7 @@ static void ping(struct addrinfo *target)
 
     freeaddrinfo(target);
     target = NULL;
+    close(sockfd);
 }
 
 /* Check if a flag exists in command line arguments */
